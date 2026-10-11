@@ -46,19 +46,23 @@ const char* typeName(TokType t) {
 }
 
 // Разбивает строку на токены. Лексические ошибки складывает в errors.
-std::vector<Token> tokenize(const std::string& s, std::vector<Error>& errors) {
+std::vector<Token> tokenize(const std::string& s, std::vector<Error>& errors) 
+{
     std::vector<Token> tokens;
     size_t i = 0;
     while (i < s.size()) {
-        unsigned char c = s[i];
+        unsigned char c = s[i]; ////??????
 
         if (std::isspace(c)) { ++i; continue; }
 
-        if (std::isdigit(c) || c == '.') {
+        if (std::isdigit(c) || c == '.') 
+        {
             size_t start = i;
             bool dot = false, bad = false;
-            while (i < s.size() && (std::isdigit((unsigned char)s[i]) || s[i] == '.')) {
-                if (s[i] == '.') {
+            while (i < s.size() && (std::isdigit((unsigned char)s[i]) || s[i] == '.')) 
+            {
+                if (s[i] == '.') 
+                {
                     if (dot) bad = true;  // вторая точка: 1.2.3
                     dot = true;
                 }
@@ -104,7 +108,8 @@ std::vector<Token> tokenize(const std::string& s, std::vector<Error>& errors) {
 
 // Рекурсивный спуск: на каждое правило грамматики - одна функция.
 // При первой синтаксической ошибке бросаем исключение Error.
-class Parser {
+class Parser 
+{
 public:
     explicit Parser(const std::vector<Token>& t) : toks(t) {}
 
@@ -121,18 +126,25 @@ private:
     const std::vector<Token>& toks;
     size_t p = 0;
 
-    const Token& cur() const { return toks[p]; }
+    const Token& cur() const 
+    { 
+        return toks[p]; 
+    }
+    
     void next() { if (cur().type != TokType::End) ++p; }
 
-    void expr() {
+    void expr() 
+    {
         term();
-        while (cur().type == TokType::Plus || cur().type == TokType::Minus) {
+        while (cur().type == TokType::Plus || cur().type == TokType::Minus) 
+        {
             next();
             term();
         }
     }
 
-    void term() {
+    void term() 
+    {
         unary();
         while (cur().type == TokType::Mul || cur().type == TokType::Div) {
             next();
@@ -202,16 +214,19 @@ bool check(const std::string& src) {
     std::vector<Token> tokens = tokenize(src, lexErrors);
 
     // Этап 1: лексический анализ
-    if (!lexErrors.empty()) {
+    if (!lexErrors.empty()) 
+    {
         std::cout << "Лексические ошибки:\n";
         for (const Error& e : lexErrors) printError(src, e);
         return false;
     }
 
     // Этап 2: синтаксический анализ
-    try {
+    try 
+    {
         Parser(tokens).parse();
-    } catch (const Error& e) {
+    } catch (const Error& e) 
+    {
         std::cout << "Синтаксическая ошибка:\n";
         printError(src, e);
         return false;
