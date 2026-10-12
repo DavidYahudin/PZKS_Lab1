@@ -1,31 +1,31 @@
 #include <iostream>
 #include <string>
 #include <vector>
-#include <memory>
 #include <cctype>
 #include <algorithm>
 
-//Token Type identefier
-//Ident     - ідентифікатор
-//Number    - константа
-//Pluss     - +
-//Minuss    - -
-//Multyplie - *
-//Divide    - /
-//RBacket   - (
-//LBacket   - )
+// Типи токенів
+//  Ident     - ідентифікатор (змінна)
+//  Number    - константа
+//  Pluss     - +
+//  Minus     - -
+//  Multyplie - *
+//  Divide    - /
+//  Fucntion  - ім'я функції (ідентифікатор, за яким іде '(')
+//  RBacket   - (  (відкриваюча дужка)
+//  LBacket   - )  (закриваюча дужка)
+//  Comma     - ,
+//  Unnown    - токен із лексичною помилкою (помилка вже занесена в список)
+//  End       - кінець виразу
+enum class T_Type { Ident, Number, Pluss, Minus, Multyplie, Divide, Fucntion, RBacket, LBacket, Comma, Unnown, End };
 
-enum class T_Type {Ident, Number, Pluss, Minus, Multyplie, Divide, Fucntion, RBacket, LBacket, Comma, Unnown, End};
-
-//Клас Токену
 struct Token
-{    
+{
     std::string text;
     T_Type type;
     int pos;
 };
 
-//Класс Помилки
 struct Error
 {
     int pos;
@@ -35,377 +35,356 @@ struct Error
 // Список усіх помилок виразу
 class ErrorList
 {
-    private:
+private:
     std::vector<Error> errors;
 
-    public:
-    //Додати помилку
-    void add(int pos, const std::string& msg)
-    {
-        errors.push_back({pos, msg});
-    }
+public:
+    void add(int pos, const std::string& msg) { errors.push_back({pos, msg}); }
 
     bool empty() const { return errors.empty(); }
 
-    // Підсумковий список
     void print(const std::string& source) const
     {
         std::vector<Error> sorted = errors;
-        std::stable_sort(sorted.begin(), sorted.end(), [](const Error& a, const Error& b){ return a.pos < b.pos; });
-        
-        std::cout << "Знайдено помилок: " << sorted.size() << "\n";
-        for (int k = 0; k < sorted.size(); k++)
-        {
-            std::cout << k + 1 << ")";
+        std::stable_sort(sorted.begin(), sorted.end(),
+                         [](const Error& a, const Error& b) { return a.pos < b.pos; });
 
-            std::cout << "  [Позиція " << sorted[k].pos + 1 << "] " << sorted[k].message << "\n"    //текст помилки
-                << "    " << source << "\n"                                                         //вівдит помилки
-                << "    " << std::string(sorted[k].pos, ' ') << "^\n";                              //вивід показчика на помилку
+        std::cout << "Знайдено помилок: " << sorted.size() << "\n";
+        for (size_t k = 0; k < sorted.size(); k++)
+        {
+            std::cout << k + 1 << ")  [Позиція " << sorted[k].pos + 1 << "] " << sorted[k].message << "\n"
+                      << "    " << source << "\n"
+                      << "    " << std::string(sorted[k].pos, ' ') << "^\n";
         }
     }
 };
 
-//Функція розбиття рядка на токени, неправильні тоцени заповнюють ветор error лексичні помилки
-std::vector<Token> lexemize (std::string input, ErrorList& errors)
+// ============================================================
+//                    ЛЕКСИЧНИЙ АНАЛІЗ
+// ============================================================
+static bool isIdStart(char c) { return std::isalpha((unsigned char)c) || c == '_'; }
+static bool isIdPart(char c)  { return std::isalnum((unsigned char)c) || c == '_'; }
+
+std::vector<Token> lexemize(const std::string& input, ErrorList& errors)
 {
     std::vector<Token> tokens;
+    size_t i = 0;
 
-    int i = 0;
+    while (i < input.size())
+    {
+        unsigned char c = (unsigned char)input[i];
 
-    while (i < input.size()) 
-    {   
-        //Пропустити пробіли
-        if (std::isspace(input[i])) 
-        { 
-            i++; 
-            continue; 
-        }
+        // Пропустити пробіли
+        if (std::isspace(c)) { i++; continue; }
 
-        //Перевірка на цілі та дробові числа
-        if (std::isdigit(input[i]) || input[i] == '.') 
+        // Числа (цілі та дробові)
+        if (std::isdigit(c) || c == '.')
         {
-            //Зберігаємо початкове значення і для пошуку цілого чилового токена
-            int start = i;
-
+            size_t start = i;
             bool dot = false, bad = false;
-            
-            while (i < input.size() && (std::isdigit(input[i]) || input[i] == '.')) 
+
+            while (i < input.size() && (std::isdigit((unsigned char)input[i]) || input[i] == '.'))
             {
-                //шукаємо повторбванну точку
-                if (input[i] == '.') 
+                if (input[i] == '.')
                 {
-                    if (dot)
-                    {
-                        bad = true;         //Друга точка
-                    }
+                    if (dot) bad = true;   // друга крапка
                     dot = true;
                 }
                 i++;
             }
 
-            std::string num = input.substr(start, i - start); //Зберігаємо числовий токен
-            
-            
-            //Перевірка чилового токену на правильність, ЧИ є зайві точки та чи правильно вони поставленні
-            if (num.front() == '.' || num.back() == '.') bad = true;
-
-            // bad number
-            if (bad) 
-            { 
-                errors.add(start, "Не коректний числовий вираз " + num);
-                tokens.push_back({num, T_Type::Unnown, start}); 
-            }
-            else 
+            // Число, "приклеєне" до букв: 2abc, 3x
+            bool glued = false;
+            if (i < input.size() && isIdStart(input[i]))
             {
-                tokens.push_back({num, T_Type::Number, start});
+                glued = true;
+                while (i < input.size() && isIdPart(input[i])) i++;
             }
-            
+
+            std::string num = input.substr(start, i - start);
+
+            if (glued)
+            {
+                errors.add((int)start, "Некоректне ім'я або число '" + num + "' (ім'я не може починатись із цифри)");
+                tokens.push_back({num, T_Type::Unnown, (int)start});
+            }
+            else if (bad || num.front() == '.' || num.back() == '.')
+            {
+                errors.add((int)start, "Некоректний числовий запис '" + num + "'");
+                tokens.push_back({num, T_Type::Unnown, (int)start});
+            }
+            else
+            {
+                tokens.push_back({num, T_Type::Number, (int)start});
+            }
             continue;
         }
 
-        //Первевірка на ім'я ідентифікатора чи функціїї
-        if (std::isalpha(input[i])) 
+        // Ідентифікатори та функції
+        if (isIdStart(input[i]))
         {
-            int start = i;
-            
-            //finding the end of the identifire
-            while (i < input.size() && (std::isalnum(input[i]) || input[i] == '_')) i++;
-
+            size_t start = i;
+            while (i < input.size() && isIdPart(input[i])) i++;
             std::string idnt = input.substr(start, i - start);
-            
-            //Чи коректтно поставленні _
-            if(idnt.front() == '_' || idnt.back() == '_')
+
+            if (idnt.front() == '_' || idnt.back() == '_')
             {
-                errors.add(start, "некоретне використанння _ у " + idnt);
+                errors.add((int)start, "Некоректне ім'я '" + idnt + "': символ '_' не може бути на початку або в кінці");
+                tokens.push_back({idnt, T_Type::Unnown, (int)start});
                 continue;
             }
 
-            //перевірка на фунцію
-            int j = i;
-            T_Type t = T_Type::Ident;
-            
-            while(std::isspace(input[j]) && j < input.size()) j++;
-            
-            //Якщо є скожка - то це функція
-            if (input[j] == '(') t = T_Type::Fucntion;
+            // Якщо далі (після пробілів) іде '(' - це функція
+            size_t j = i;
+            while (j < input.size() && std::isspace((unsigned char)input[j])) j++;
+            T_Type t = (j < input.size() && input[j] == '(') ? T_Type::Fucntion : T_Type::Ident;
 
-            //Повертення токену
-            tokens.push_back({idnt, t, start});
+            tokens.push_back({idnt, t, (int)start});
             continue;
         }
 
-
-        //Перевірка на оператори
+        // Оператори та дужки
         T_Type t;
-
-        switch(input[i])
+        switch (input[i])
         {
-            case '+': t = T_Type::Pluss; break;
-            case '-': t = T_Type::Minus; break;
+            case '+': t = T_Type::Pluss;     break;
+            case '-': t = T_Type::Minus;     break;
             case '*': t = T_Type::Multyplie; break;
-            case '/': t = T_Type::Divide; break;
-            case ')': t = T_Type::LBacket; break;
-            case '(': t = T_Type::RBacket; break;
-            case ',': t = T_Type::Comma; break;
-            default:         
-                errors.add(i, "Невідомий символ " + std::string(1, (char)input[i]));    
-                tokens.push_back({std::string(1, input[i]), T_Type::Unnown, i});
-                i++;
-            continue;
-            break;
+            case '/': t = T_Type::Divide;    break;
+            case '(': t = T_Type::RBacket;   break;
+            case ')': t = T_Type::LBacket;   break;
+            case ',': t = T_Type::Comma;     break;
+            default:
+            {
+                // Невідомий символ (для UTF-8 беремо всі байти символу)
+                size_t start = i++;
+                while (i < input.size() && (((unsigned char)input[i]) & 0xC0) == 0x80) i++;
+                std::string sym = input.substr(start, i - start);
+                errors.add((int)start, "Невідомий символ '" + sym + "'");
+                tokens.push_back({sym, T_Type::Unnown, (int)start});
+                continue;
+            }
         }
-        tokens.push_back({std::string(1, (char)input[i]), t, i});
-
-        //Нове коло
+        tokens.push_back({std::string(1, input[i]), t, (int)i});
         i++;
     }
-
     return tokens;
 }
 
-//Класс Празер проводить синтактичний аналіз токенів за семантичним спуском
-class Praser
+
+enum class State { Start, AfterOperand, AfterClose, AfterOp, AfterOpen, AfterComma, AfterFunc };
+
+class FsmParser
 {
-    private:
-    std::vector<Token> tokens;
+private:
+    struct Paren { int pos; bool isCall; };
+
+    const std::vector<Token>& tokens;
     ErrorList& errors;
-    size_t cur = 0;
-    int endPos;
-    int lastErrPos = -1;
+    State state = State::Start;
+    std::vector<Paren> stack;
+    Token last{"", T_Type::End, 0};   // останній оброблений токен
 
-    Token peek() const
+    static bool isOperand(T_Type t) { return t == T_Type::Number || t == T_Type::Ident; }
+    static bool isAdd(T_Type t)     { return t == T_Type::Pluss || t == T_Type::Minus; }
+    static bool isMul(T_Type t)     { return t == T_Type::Multyplie || t == T_Type::Divide; }
+
+    static std::string q(const Token& t) { return "'" + t.text + "'"; }
+
+    // Стан, у якому очікується операнд
+    bool expectsOperand() const
     {
-        if (cur < tokens.size()) return tokens[cur];
-        return {"", T_Type::End, endPos};
+        return state == State::Start || state == State::AfterOp ||
+               state == State::AfterOpen || state == State::AfterComma;
     }
 
-    Token prevToken() const
+    void missingOperator(const Token& t)
     {
-        if (cur > 0 && cur <= tokens.size()) return tokens[cur - 1];
-        return {"", T_Type::End, 0};
+        if (last.type == T_Type::Unnown) return;   // помилку вже знайшов лексер
+        if (state == State::AfterClose)
+            errors.add(t.pos, "Пропущено оператор між ')' та " + q(t));
+        else
+            errors.add(t.pos, "Пропущено оператор між " + q(last) + " та " + q(t));
     }
 
-    Token next()
+    // ---------- перехід за ')' ----------
+    void onClose(const Token& t)
     {
-        Token t = peek();
-        if (cur < tokens.size()) cur++;
-        return t;
-    }
-
-    bool is(T_Type t) const { return peek().type == t; }
-
-    static std::string describe(const Token& t)
-    {
-        if (t.type == T_Type::End) return "кінець виразу";
-        return "'" + t.text + "'";
-    }
-
-    void report(int pos, const std::string& msg)
-    {
-        if (pos == lastErrPos) return;
-        lastErrPos = pos;
-        errors.add(pos, msg);
-    }
-
-    void reportMissingOperator()
-    {
-        Token t = peek(), p = prevToken();
-
-        //Помилка вже була знайдена лексером - не дублюємо
-        if (t.type == T_Type::Unnown || p.type == T_Type::Unnown) return;
-
-        //2(t) - число не може бути іменем функції
-        if (t.type == T_Type::LBacket && p.type == T_Type::Number)
+        if (stack.empty())
         {
-            report(p.pos, "Число '" + p.text + "' не може бути іменем функції");
-            return;
+            errors.add(t.pos, state == State::Start
+                ? "Вираз не може починатись із закриваючої дужки ')'"
+                : "Зайва закриваюча дужка ')'");
+            return;     // стан не змінюється
         }
-        report(t.pos, "Пропущено оператор перед " + describe(t));
-    }
 
-    void skipRepeatedOperators(const Token& prev)
-    {
-        while (is(T_Type::Pluss) || is(T_Type::Minus) ||
-               is(T_Type::Multyplie) || is(T_Type::Divide))
+        switch (state)
         {
-            Token t = next();
-            report(t.pos, "Повторюваний оператор '" + t.text + "' після '" + prev.text + "'");
+            case State::AfterOpen:
+                errors.add(t.pos, stack.back().isCall
+                    ? "Порожній виклик функції: відсутній аргумент"
+                    : "Порожні дужки '()'");
+                break;
+            case State::AfterComma:
+                errors.add(t.pos, "Порожній аргумент функції перед ')'");
+                break;
+            case State::AfterOp:
+                errors.add(last.pos, "Оператор " + q(last) + " перед ')' без операнда");
+                break;
+            default:
+                break;
         }
+        stack.pop_back();
+        state = State::AfterClose;
     }
 
-    //Зайві операнди та коми перед ')' (або перед ',' якщо це аргументи функції)
-    void parseRest(bool allowComma)
+    // ---------- перехід за ',' ----------
+    void onComma(const Token& t)
     {
-        while (!is(T_Type::RBacket) && !is(T_Type::End) &&
-               !(allowComma && is(T_Type::Comma)))
+        bool inCall = !stack.empty() && stack.back().isCall;
+        if (!inCall)
         {
-            if (is(T_Type::Comma))
-            {
-                report(peek().pos, "Кома поза викликом функції");
-                next();
-                if (!is(T_Type::RBacket) && !is(T_Type::End) && !is(T_Type::Comma))
-                    parseExpression();
-                continue;
-            }
-            reportMissingOperator();
-            parseExpression();
+            errors.add(t.pos, "Кома поза викликом функції");
+            return;     // стан не змінюється
         }
+
+        if (state == State::AfterOpen || state == State::AfterComma)
+            errors.add(t.pos, "Порожній аргумент функції перед комою");
+        else if (state == State::AfterOp)
+            errors.add(last.pos, "Оператор " + q(last) + " перед комою без операнда");
+
+        state = State::AfterComma;
     }
 
-    void expectClose(const Token& open)
+    // ---------- перехід за оператором + - * / ----------
+    void onOperator(const Token& t)
     {
-        if (is(T_Type::RBacket)) next();
-        else report(open.pos, "Відсутня закриваюча дужка для '('");
-    }
-
-    void parseExpression()
-    {
-        parseTerm();
-        while (is(T_Type::Pluss) || is(T_Type::Minus))
+        switch (state)
         {
-            Token op = next();
-            skipRepeatedOperators(op);
-            parseTerm();
-        }
-    }
-
-    void parseTerm()
-    {
-        parseUnary();
-        while (is(T_Type::Multyplie) || is(T_Type::Divide))
-        {
-            Token op = next();
-            skipRepeatedOperators(op);
-            parseUnary();
-        }
-    }
-
-    void parseUnary()
-    {
-        if (is(T_Type::Pluss) || is(T_Type::Minus))
-        {
-            Token sign = next();
-            skipRepeatedOperators(sign);
-        }
-        parsePrimary();
-    }
-
-    void parsePrimary()
-    {
-        Token t = peek();
-        switch (t.type)
-        {
-            case T_Type::Number:
-            case T_Type::Ident:
-            case T_Type::Unnown:    //помилка вже відома з лексера
-                next();
+            case State::AfterOperand:
+            case State::AfterClose:
+                state = State::AfterOp;
                 break;
 
-            case T_Type::Fucntion:
-                parseCall();
-                break;
+            case State::AfterOp:
+                errors.add(t.pos, "Подвійна операція: " + q(t) + " після " + q(last));
+                break;      // стан не змінюється
 
-            case T_Type::LBacket:
-                parseParen();
+            case State::Start:
+            case State::AfterOpen:
+            case State::AfterComma:
+                if (isAdd(t.type))
+                    state = State::AfterOp;        // унарний знак
+                else if (state == State::Start)
+                    errors.add(t.pos, "Вираз не може починатись з оператора " + q(t));
+                else if (state == State::AfterOpen)
+                    errors.add(t.pos, "Оператор " + q(t) + " одразу після відкритої дужки");
+                else
+                    errors.add(t.pos, "Оператор " + q(t) + " одразу після коми");
                 break;
 
             default:
-                report(t.pos, "Очікується операнд (число, змінна, функція або '('), а знайдено " + describe(t));
                 break;
         }
     }
 
-    //'(' expr ')'
-    void parseParen()
+    // ---------- перехід за операндом / функцією / '(' ----------
+    void onOperandLike(const Token& t)
     {
-        Token open = next();
-        parseExpression();
-        parseRest(false);
-        expectClose(open);
-    }
+        if (!expectsOperand())
+            missingOperator(t);   // AfterOperand / AfterClose
 
-    //name '(' [ expr { ',' expr } ] ')'   - порожні аргументи є помилкою
-    void parseCall()
-    {
-        next();                 //ім'я функції
-        Token open = next();    //'(' (лексер гарантує)
-
-        while (true)
+        if (isOperand(t.type))
+            state = State::AfterOperand;
+        else if (t.type == T_Type::Fucntion)
+            state = State::AfterFunc;
+        else   // '('
         {
-            if (is(T_Type::Comma) || is(T_Type::RBacket))
-                report(peek().pos, "Порожній аргумент функції");
-            else if (!is(T_Type::End))
-                parseExpression();
-
-            parseRest(true);
-
-            if (is(T_Type::Comma)) { next(); continue; }
-            break;
+            stack.push_back({t.pos, false});
+            state = State::AfterOpen;
         }
-        expectClose(open);
     }
 
-    public:
-    Praser(const std::vector<Token>& toks, ErrorList& errs, int endPosition)
-        : tokens(toks), errors(errs), endPos(endPosition) {}
+public:
+    FsmParser(const std::vector<Token>& toks, ErrorList& errs) : tokens(toks), errors(errs) {}
+
+    // Один крок автомата
+    void step(const Token& t)
+    {
+        if (t.type == T_Type::Unnown)
+        {
+            // Помилка вже в списку від лексера: вважаємо токен операндом,
+            // але не створюємо додаткових помилок.
+            state = State::AfterOperand;
+        }
+        else if (state == State::AfterFunc)
+        {
+            // Лексер гарантує, що після імені функції йде '('
+            stack.push_back({t.pos, true});
+            state = State::AfterOpen;
+        }
+        else switch (t.type)
+        {
+            case T_Type::Number:
+            case T_Type::Ident:
+            case T_Type::Fucntion:
+            case T_Type::RBacket:  onOperandLike(t); break;
+            case T_Type::LBacket:  onClose(t);       break;
+            case T_Type::Comma:    onComma(t);       break;
+            case T_Type::Pluss:
+            case T_Type::Minus:
+            case T_Type::Multyplie:
+            case T_Type::Divide:   onOperator(t);    break;
+            default: break;
+        }
+        last = t;
+    }
+
+    // Перевірка заключного стану
+    void finish()
+    {
+        switch (state)
+        {
+            case State::AfterOp:
+                errors.add(last.pos, "Вираз не може закінчуватись оператором " + q(last));
+                break;
+            case State::AfterOpen:
+                errors.add(last.pos, stack.back().isCall
+                    ? "Після '(' виклику функції відсутній аргумент"
+                    : "Після '(' відсутній операнд");
+                break;
+            case State::AfterComma:
+                errors.add(last.pos, "Після коми відсутній аргумент функції");
+                break;
+            default:
+                break;
+        }
+        for (const Paren& p : stack)
+            errors.add(p.pos, "Відсутня закриваюча дужка для цієї '('");
+    }
 
     void parse()
     {
-        if (tokens.empty()) { report(0, "Порожній вираз"); return; }
-
-        while (true)
+        if (tokens.empty())
         {
-            //Зайві ')' та ',' на верхньому рівні
-            while (is(T_Type::RBacket) || is(T_Type::Comma))
-            {
-                Token t = next();
-                report(t.pos, t.type == T_Type::RBacket
-                    ? "Зайва закриваюча дужка ')'"
-                    : "Кома поза викликом функції");
-            }
-            if (is(T_Type::End)) break;
-
-            parseExpression();
-
-            if (is(T_Type::End)) break;
-            if (!is(T_Type::RBacket) && !is(T_Type::Comma)) reportMissingOperator();
+            errors.add(0, "Порожній вираз");
+            return;
         }
+        for (const Token& t : tokens) step(t);
+        finish();
     }
 };
 
-
 int main()
-{   
-    ///ВВедення рядка
+{
     std::string input;
     std::cout << "Введіть рядок: ";
-
     std::getline(std::cin, input);
 
     ErrorList errors;
-
     std::vector<Token> tokens = lexemize(input, errors);
-    Praser parser(tokens, errors, (int)input.size());
+
+    FsmParser parser(tokens, errors);
     parser.parse();
 
     if (errors.empty())
