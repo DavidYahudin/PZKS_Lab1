@@ -3,6 +3,7 @@
 #include <vector>
 #include <memory>
 #include <cctype>
+#include <algorithm>
 
 //Token Type identefier
 //Ident     - ідентифікатор
@@ -14,7 +15,7 @@
 //RBacket   - (
 //LBacket   - )
 
-enum class T_Type {Ident, Number, Pluss, Minus, Multyplie, Divide, Fucntion, RBacket, LBacket, Unnown , End};
+enum class T_Type {Ident, Number, Pluss, Minus, Multyplie, Divide, Fucntion, RBacket, LBacket, Comma, Unnown, End};
 
 //Клас Токену
 struct Token
@@ -49,14 +50,17 @@ class ErrorList
     // Підсумковий список
     void print(const std::string& source) const
     {
-        std::cout << "Знайдено помилок: " << errors.size() << "\n";
-        for (int k = 0; k < errors.size(); k++)
+        std::vector<Error> sorted = errors;
+        std::stable_sort(sorted.begin(), sorted.end(), [](const Error& a, const Error& b){ return a.pos < b.pos; });
+        
+        std::cout << "Знайдено помилок: " << sorted.size() << "\n";
+        for (int k = 0; k < sorted.size(); k++)
         {
             std::cout << k + 1 << ")";
 
-            std::cout << "  [Позиція " << errors[k].pos + 1 << "] " << errors[k].message << "\n"    //текст помилки
+            std::cout << "  [Позиція " << sorted[k].pos + 1 << "] " << sorted[k].message << "\n"    //текст помилки
                 << "    " << source << "\n"                                                         //вівдит помилки
-                << "    " << std::string(errors[k].pos, ' ') << "^\n";                              //вивід показчика на помилку
+                << "    " << std::string(sorted[k].pos, ' ') << "^\n";                              //вивід показчика на помилку
         }
     }
 };
@@ -104,10 +108,18 @@ std::vector<Token> lexemize (std::string input, ErrorList& errors)
             
             //Перевірка чилового токену на правильність, ЧИ є зайві точки та чи правильно вони поставленні
             if (num.front() == '.' || num.back() == '.') bad = true;
-            
-            if (bad) errors.add(start, "Не коректний числовий вираз" + num);
-            else tokens.push_back({num, T_Type::Number, start});
 
+            // bad number
+            if (bad) 
+            { 
+                errors.add(start, "Не коректний числовий вираз " + num);
+                tokens.push_back({num, T_Type::Unnown, start}); 
+            }
+            else 
+            {
+                tokens.push_back({num, T_Type::Number, start});
+            }
+            
             continue;
         }
 
@@ -154,10 +166,12 @@ std::vector<Token> lexemize (std::string input, ErrorList& errors)
             case '/': t = T_Type::Divide; break;
             case ')': t = T_Type::LBacket; break;
             case '(': t = T_Type::RBacket; break;
-            default:
-                errors.add(i, "Невідомий символ " + std::string(1, (char)input[i]));
+            case ',': t = T_Type::Comma; break;
+            default:         
+                errors.add(i, "Невідомий символ " + std::string(1, (char)input[i]));    
+                tokens.push_back({std::string(1, input[i]), T_Type::Unnown, i});
                 i++;
-                continue;
+            continue;
             break;
         }
         tokens.push_back({std::string(1, (char)input[i]), t, i});
@@ -173,20 +187,24 @@ std::vector<Token> lexemize (std::string input, ErrorList& errors)
 class Praser
 {
     private:
-    std::vector<Token> tokens; //Вектор токенів для взаємодії
+    std::vector<Token> tokens;
     ErrorList& errors;
-    size_t cur = 0;       //Поточний токен
-    int endPos;           //Позиція кінця рядка (для помилок "вираз закінчився")
-    int lastErrPos = -1;  //Щоб не видавати дві помилки в одній позиції
+    size_t cur = 0;
+    int endPos;
+    int lastErrPos = -1;
 
-    //Поточний токен (або штучний End, якщо токени закінчились)
     Token peek() const
     {
         if (cur < tokens.size()) return tokens[cur];
         return {"", T_Type::End, endPos};
     }
 
-    //Взяти поточний токен і перейти до наступного
+    Token prevToken() const
+    {
+        if (cur > 0 && cur <= tokens.size()) return tokens[cur - 1];
+        return {"", T_Type::End, 0};
+    }
+
     Token next()
     {
         Token t = peek();
@@ -195,17 +213,6 @@ class Praser
     }
 
     bool is(T_Type t) const { return peek().type == t; }
-
-    //Якщо після оператора одразу йде ще оператор - це помилка. Пропускаємо всі зайві.
-    void skipRepeatedOperators(const Token& prev)
-    {
-        while (is(T_Type::Pluss) || is(T_Type::Minus) ||
-               is(T_Type::Multyplie) || is(T_Type::Divide))
-        {
-            Token t = next();
-            report(t.pos, "Повторюваний оператор '" + t.text + "' після '" + prev.text + "'");
-        }
-    }
 
     static std::string describe(const Token& t)
     {
@@ -222,11 +229,55 @@ class Praser
 
     void reportMissingOperator()
     {
-        Token t = peek();
+        Token t = peek(), p = prevToken();
+
+        //Помилка вже була знайдена лексером - не дублюємо
+        if (t.type == T_Type::Unnown || p.type == T_Type::Unnown) return;
+
+        //2(t) - число не може бути іменем функції
+        if (t.type == T_Type::LBacket && p.type == T_Type::Number)
+        {
+            report(p.pos, "Число '" + p.text + "' не може бути іменем функції");
+            return;
+        }
         report(t.pos, "Пропущено оператор перед " + describe(t));
     }
 
-    //expr := term { (+|-) term }
+    void skipRepeatedOperators(const Token& prev)
+    {
+        while (is(T_Type::Pluss) || is(T_Type::Minus) ||
+               is(T_Type::Multyplie) || is(T_Type::Divide))
+        {
+            Token t = next();
+            report(t.pos, "Повторюваний оператор '" + t.text + "' після '" + prev.text + "'");
+        }
+    }
+
+    //Зайві операнди та коми перед ')' (або перед ',' якщо це аргументи функції)
+    void parseRest(bool allowComma)
+    {
+        while (!is(T_Type::RBacket) && !is(T_Type::End) &&
+               !(allowComma && is(T_Type::Comma)))
+        {
+            if (is(T_Type::Comma))
+            {
+                report(peek().pos, "Кома поза викликом функції");
+                next();
+                if (!is(T_Type::RBacket) && !is(T_Type::End) && !is(T_Type::Comma))
+                    parseExpression();
+                continue;
+            }
+            reportMissingOperator();
+            parseExpression();
+        }
+    }
+
+    void expectClose(const Token& open)
+    {
+        if (is(T_Type::RBacket)) next();
+        else report(open.pos, "Відсутня закриваюча дужка для '('");
+    }
+
     void parseExpression()
     {
         parseTerm();
@@ -238,7 +289,6 @@ class Praser
         }
     }
 
-    //term := unary { (*|/) unary }
     void parseTerm()
     {
         parseUnary();
@@ -250,7 +300,6 @@ class Praser
         }
     }
 
-    //unary := [(+|-)] primary   (лише один знак, і лише на початку виразу або після '(')
     void parseUnary()
     {
         if (is(T_Type::Pluss) || is(T_Type::Minus))
@@ -261,8 +310,6 @@ class Praser
         parsePrimary();
     }
 
-
-    //primary := Number | Ident | Function '(' expr ')' | '(' expr ')'
     void parsePrimary()
     {
         Token t = peek();
@@ -270,12 +317,12 @@ class Praser
         {
             case T_Type::Number:
             case T_Type::Ident:
+            case T_Type::Unnown:    //помилка вже відома з лексера
                 next();
                 break;
 
             case T_Type::Fucntion:
-                next();         //ім'я функції, лексер гарантує що далі '('
-                parseParen();
+                parseCall();
                 break;
 
             case T_Type::LBacket:
@@ -283,7 +330,6 @@ class Praser
                 break;
 
             default:
-                //Токен НЕ споживаємо - його обробить викликаючий код
                 report(t.pos, "Очікується операнд (число, змінна, функція або '('), а знайдено " + describe(t));
                 break;
         }
@@ -292,47 +338,57 @@ class Praser
     //'(' expr ')'
     void parseParen()
     {
-        Token open = next();    //'('
+        Token open = next();
         parseExpression();
+        parseRest(false);
+        expectClose(open);
+    }
 
-        //Усередині дужок лишився операнд без оператора, напр. (2 3)
-        while (!is(T_Type::RBacket) && !is(T_Type::End))
+    //name '(' [ expr { ',' expr } ] ')'   - порожні аргументи є помилкою
+    void parseCall()
+    {
+        next();                 //ім'я функції
+        Token open = next();    //'(' (лексер гарантує)
+
+        while (true)
         {
-            reportMissingOperator();
-            parseExpression();
-        }
+            if (is(T_Type::Comma) || is(T_Type::RBacket))
+                report(peek().pos, "Порожній аргумент функції");
+            else if (!is(T_Type::End))
+                parseExpression();
 
-        if (is(T_Type::RBacket)) next();
-        else report(open.pos, "Відсутня закриваюча дужка для '('");
+            parseRest(true);
+
+            if (is(T_Type::Comma)) { next(); continue; }
+            break;
+        }
+        expectClose(open);
     }
 
     public:
     Praser(const std::vector<Token>& toks, ErrorList& errs, int endPosition)
         : tokens(toks), errors(errs), endPos(endPosition) {}
 
-    //Запуск аналізу
     void parse()
     {
-        if (tokens.empty())
-        {
-            report(0, "Порожній вираз");
-            return;
-        }
+        if (tokens.empty()) { report(0, "Порожній вираз"); return; }
 
         while (true)
         {
-            parseExpression();
+            //Зайві ')' та ',' на верхньому рівні
+            while (is(T_Type::RBacket) || is(T_Type::Comma))
+            {
+                Token t = next();
+                report(t.pos, t.type == T_Type::RBacket
+                    ? "Зайва закриваюча дужка ')'"
+                    : "Кома поза викликом функції");
+            }
             if (is(T_Type::End)) break;
 
-            if (is(T_Type::RBacket))
-            {
-                report(peek().pos, "Зайва закриваюча дужка ')'");
-                next();
-            }
-            else
-            {
-                reportMissingOperator();    //наступний прохід споживе цей операнд
-            }
+            parseExpression();
+
+            if (is(T_Type::End)) break;
+            if (!is(T_Type::RBacket) && !is(T_Type::Comma)) reportMissingOperator();
         }
     }
 };
@@ -349,13 +405,8 @@ int main()
     ErrorList errors;
 
     std::vector<Token> tokens = lexemize(input, errors);
-    
-    //Синтаксичний аналіз лише якщо немає лексичних помилок (щоб не було хибних каскадних помилок)
-    if (errors.empty())
-    {
-        Praser parser(tokens, errors, (int)input.size());
-        parser.parse();
-    }   
+    Praser parser(tokens, errors, (int)input.size());
+    parser.parse();
 
     if (errors.empty())
         std::cout << "Помилки відсутні :)" << std::endl;
